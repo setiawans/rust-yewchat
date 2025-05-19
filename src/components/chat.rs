@@ -9,6 +9,9 @@ use crate::{services::websocket::WebsocketService, User};
 pub enum Msg {
     HandleMsg(String),
     SubmitMessage,
+    ToggleEmojiPanel,
+    SelectEmoji(String),
+    ChangeBackground(String),
 }
 
 #[derive(Deserialize)]
@@ -45,7 +48,10 @@ pub struct Chat {
     _producer: Box<dyn Bridge<EventBus>>,
     wss: WebsocketService,
     messages: Vec<MessageData>,
+    emoji_panel_open: bool,
+    current_background: String,
 }
+
 impl Component for Chat {
     type Message = Msg;
     type Properties = ();
@@ -64,10 +70,11 @@ impl Component for Chat {
             data_array: None,
         };
 
-        if let Ok(_) = wss
+        if wss
             .tx
             .clone()
             .try_send(serde_json::to_string(&message).unwrap())
+            .is_ok()
         {
             log::debug!("message sent successfully");
         }
@@ -78,6 +85,8 @@ impl Component for Chat {
             chat_input: NodeRef::default(),
             wss,
             _producer: EventBus::bridge(ctx.link().callback(Msg::HandleMsg)),
+            emoji_panel_open: false,
+            current_background: "bg-white".to_string(),
         }
     }
 
@@ -93,7 +102,7 @@ impl Component for Chat {
                             .map(|u| UserProfile {
                                 name: u.into(),
                                 avatar: format!(
-                                    "https://avatars.dicebear.com/api/adventurer-neutral/{}.svg",
+                                    "https://api.dicebear.com/9.x/big-smile/svg?seed={}",
                                     u
                                 )
                                 .into(),
@@ -132,14 +141,36 @@ impl Component for Chat {
                 };
                 false
             }
+            Msg::ToggleEmojiPanel => {
+                self.emoji_panel_open = !self.emoji_panel_open;
+                true
+            }
+            Msg::SelectEmoji(emoji) => {
+                if let Some(input) = self.chat_input.cast::<HtmlInputElement>() {
+                    let current_value = input.value();
+                    input.set_value(&format!("{} {}", current_value, emoji));
+                }
+                self.emoji_panel_open = false;
+                true
+            }
+            Msg::ChangeBackground(bg_class) => {
+                self.current_background = bg_class;
+                true
+            }
         }
     }
 
     fn view(&self, ctx: &Context<Self>) -> Html {
         let submit = ctx.link().callback(|_| Msg::SubmitMessage);
+        let toggle_emoji = ctx.link().callback(|_| Msg::ToggleEmojiPanel);
+        
+        let bg_white = ctx.link().callback(|_| Msg::ChangeBackground("bg-white".to_string()));
+        let bg_blue = ctx.link().callback(|_| Msg::ChangeBackground("bg-blue-100".to_string()));
+        let bg_green = ctx.link().callback(|_| Msg::ChangeBackground("bg-green-100".to_string()));
+        let bg_purple = ctx.link().callback(|_| Msg::ChangeBackground("bg-purple-100".to_string()));
 
         html! {
-            <div class="flex w-screen">
+            <div class={format!("flex w-screen {}", self.current_background)}>
                 <div class="flex-none w-56 h-screen bg-gray-100">
                     <div class="text-xl p-3">{"Users"}</div>
                     {
@@ -154,7 +185,7 @@ impl Component for Chat {
                                             <div>{u.name.clone()}</div>
                                         </div>
                                         <div class="text-xs text-gray-400">
-                                            {"Hi there!"}
+                                            {"Online"}
                                         </div>
                                     </div>
                                 </div>
@@ -163,11 +194,24 @@ impl Component for Chat {
                     }
                 </div>
                 <div class="grow h-screen flex flex-col">
-                    <div class="w-full h-14 border-b-2 border-gray-300"><div class="text-xl p-3">{"💬 Chat!"}</div></div>
+                    <div class="w-full h-14 border-b-2 border-gray-300 flex items-center justify-between px-4">
+                        <div class="text-xl p-3">{"💬 Chat!"}</div>
+                        <div class="flex space-x-2">
+                            <button onclick={bg_white} class="w-6 h-6 bg-white border border-gray-300 rounded-full"></button>
+                            <button onclick={bg_blue} class="w-6 h-6 bg-blue-100 border border-gray-300 rounded-full"></button>
+                            <button onclick={bg_green} class="w-6 h-6 bg-green-100 border border-gray-300 rounded-full"></button>
+                            <button onclick={bg_purple} class="w-6 h-6 bg-purple-100 border border-gray-300 rounded-full"></button>
+                        </div>
+                    </div>
                     <div class="w-full grow overflow-auto border-b-2 border-gray-300">
                         {
                             self.messages.iter().map(|m| {
-                                let user = self.users.iter().find(|u| u.name == m.from).unwrap();
+                                let default_profile = UserProfile {
+                                    name: m.from.clone(),
+                                    avatar: format!("https://api.dicebear.com/9.x/big-smile/svg?seed={}", m.from),
+                                };
+                                let user = self.users.iter().find(|u| u.name == m.from).unwrap_or(&default_profile);
+                                
                                 html!{
                                     <div class="flex items-end w-3/6 bg-gray-100 m-8 rounded-tl-lg rounded-tr-lg rounded-br-lg ">
                                         <img class="w-8 h-8 rounded-full m-3" src={user.avatar.clone()} alt="avatar"/>
@@ -187,10 +231,50 @@ impl Component for Chat {
                                 }
                             }).collect::<Html>()
                         }
-
                     </div>
+                    
+                    <div class="relative">
+                        {
+                            if self.emoji_panel_open {
+                                let emojis = vec!["😊", "😂", "❤️", "👍", "😍", "🔥", "👋", "🎉", "👏"];
+                                html! {
+                                    <div class="absolute bottom-16 left-4 bg-white shadow-lg rounded-lg p-2 z-10 grid grid-cols-3 gap-2">
+                                        {
+                                            emojis.iter().map(|emoji| {
+                                                let emoji_str = emoji.to_string();
+                                                let select_emoji = ctx.link().callback(move |_| Msg::SelectEmoji(emoji_str.clone()));
+                                                html! {
+                                                    <button onclick={select_emoji} class="text-2xl p-2 hover:bg-gray-100 rounded">
+                                                        {emoji}
+                                                    </button>
+                                                }
+                                            }).collect::<Html>()
+                                        }
+                                    </div>
+                                }
+                            } else {
+                                html! {}
+                            }
+                        }
+                    </div>
+                    
                     <div class="w-full h-14 flex px-3 items-center">
-                        <input ref={self.chat_input.clone()} type="text" placeholder="Message" class="block w-full py-2 pl-4 mx-3 bg-gray-100 rounded-full outline-none focus:text-gray-700" name="message" required=true />
+                        <button 
+                            onclick={toggle_emoji}
+                            class="p-2 text-xl hover:bg-gray-100 rounded"
+                        >
+                            {"😊"}
+                        </button>
+                        <input ref={self.chat_input.clone()} type="text" placeholder="Message" class="block w-full py-2 pl-4 mx-3 bg-gray-100 rounded-full outline-none focus:text-gray-700" name="message" required=true 
+                            onkeypress={
+                                let link = ctx.link().clone();
+                                Callback::from(move |e: KeyboardEvent| {
+                                    if e.key() == "Enter" {
+                                        link.send_message(Msg::SubmitMessage);
+                                    }
+                                })
+                            }
+                        />
                         <button onclick={submit} class="p-3 shadow-sm bg-blue-600 w-10 h-10 rounded-full flex justify-center items-center color-white">
                             <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" class="fill-white">
                                 <path d="M0 0h24v24H0z" fill="none"></path><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"></path>
